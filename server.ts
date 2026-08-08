@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-import { GoogleGenAI, Modality, Type } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -27,43 +27,89 @@ function getGeminiClient() {
     },
   });
 }
+function pcmToWav(
+  pcmData: Buffer,
+  sampleRate: number = 24000,
+  channels: number = 1,
+  bitsPerSample: number = 16
+): Buffer {
 
-// Helper to create a synthetic WAV audio buffer in case live API keys aren't attached
-function createSyntheticWavBuffer(durationSec: number = 2.5, pitchHz: number = 220): Buffer {
-  const sampleRate = 24000;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const dataSize = numSamples * 2;
-  const buffer = Buffer.alloc(44 + dataSize);
+  const byteRate =
+    sampleRate *
+    channels *
+    bitsPerSample / 8;
 
-  // RIFF header
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-  // fmt chunk
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16); // Chunk size
-  buffer.writeUInt16LE(1, 20); // PCM
-  buffer.writeUInt16LE(1, 22); // Mono
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28); // Byte rate
-  buffer.writeUInt16LE(2, 32); // Block align
-  buffer.writeUInt16LE(16, 34); // Bits per sample
+  const blockAlign =
+    channels *
+    bitsPerSample / 8;
 
-  // data chunk
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
+  const wavBuffer =
+    Buffer.alloc(44 + pcmData.length);
 
-  // Generate sine wave with mild decay
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    const sample = Math.sin(2 * Math.PI * pitchHz * t) * 0.3 * Math.exp(-t / (durationSec * 1.2));
-    const intSample = Math.floor(sample * 32767);
-    buffer.writeInt16LE(intSample, 44 + i * 2);
-  }
+  // RIFF
+  wavBuffer.write('RIFF', 0);
 
-  return buffer;
+  wavBuffer.writeUInt32LE(
+    36 + pcmData.length,
+    4
+  );
+
+  wavBuffer.write('WAVE', 8);
+
+  // fmt
+  wavBuffer.write('fmt ', 12);
+
+  wavBuffer.writeUInt32LE(
+    16,
+    16
+  );
+
+  // PCM = 1
+  wavBuffer.writeUInt16LE(
+    1,
+    20
+  );
+
+  wavBuffer.writeUInt16LE(
+    channels,
+    22
+  );
+
+  wavBuffer.writeUInt32LE(
+    sampleRate,
+    24
+  );
+
+  wavBuffer.writeUInt32LE(
+    byteRate,
+    28
+  );
+
+  wavBuffer.writeUInt16LE(
+    blockAlign,
+    32
+  );
+
+  wavBuffer.writeUInt16LE(
+    bitsPerSample,
+    34
+  );
+
+  // data
+  wavBuffer.write('data', 36);
+
+  wavBuffer.writeUInt32LE(
+    pcmData.length,
+    40
+  );
+
+  pcmData.copy(
+    wavBuffer,
+    44
+  );
+
+  return wavBuffer;
 }
-
 // 1. API - Health check
 app.get('/api/health', (req, res) => {
   const hasApiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
@@ -257,59 +303,137 @@ Responda ESTRITAMENTE em formato JSON com o seguinte schema:
 // 3. API - Voice TTS Generation & Preview
 app.post('/api/voices/generate', async (req, res) => {
   try {
-    const { text, voiceId, prebuiltVoiceName, pitch, speed } = req.body;
+    const {
+      text,
+      voiceId,
+      prebuiltVoiceName,
+      pitch,
+      speed
+    } = req.body;
 
-    if (!text) {
-      return res.status(400).json({ error: 'O texto da narração é necessário.' });
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'O texto da narração é necessário.'
+      });
     }
 
     const ai = getGeminiClient();
-    const voiceToUse = prebuiltVoiceName || 'Kore';
 
-    if (ai) {
-      try {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-tts-preview',
-          contents: [{ parts: [{ text }] }],
-          config: {
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: voiceToUse },
-              },
-            },
-          },
-        });
-
-        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (base64Audio) {
-          const audioBuffer = Buffer.from(base64Audio, 'base64');
-          return res.json({
-            success: true,
-            source: 'gemini_tts',
-            audioDataUrl: `data:audio/wav;base64,${base64Audio}`,
-            durationSec: Math.max(2, Math.round(text.split(/\s+/).length * 0.4)),
-          });
-        }
-      } catch (ttsErr: any) {
-        console.warn('Gemini TTS error, fallback to synthetic audio:', ttsErr?.message);
-      }
+    if (!ai) {
+      return res.status(500).json({
+        success: false,
+        error: 'GEMINI_API_KEY não configurada no servidor.'
+      });
     }
 
-    // Synthetic Wav Fallback in Demo Mode
-    const estimatedDuration = Math.max(2, Math.round(text.split(/\s+/).length * 0.45));
-    const wavBuffer = createSyntheticWavBuffer(estimatedDuration, voiceId === 'rayo' ? 320 : voiceId === 'knightley' ? 140 : 220);
-    const base64Audio = wavBuffer.toString('base64');
+    const voiceToUse = prebuiltVoiceName || 'Kore';
 
-    return res.json({
-      success: true,
-      source: 'synthetic_demo',
-      audioDataUrl: `data:audio/wav;base64,${base64Audio}`,
-      durationSec: estimatedDuration,
-    });
+    console.log(
+      `[TTS] Gerando voz "${voiceToUse}" para ${text.length} caracteres`
+    );
+
+    try {
+      const interaction: any = await ai.interactions.create({
+        model: 'gemini-3.1-flash-tts-preview',
+
+        input: `
+Gere exclusivamente a narração em áudio.
+
+Idioma: português do Brasil.
+Fale de forma natural, clara e profissional.
+Não leia estas instruções.
+Não acrescente comentários.
+
+Texto que deve ser falado:
+${text.trim()}
+        `.trim(),
+
+        response_format: {
+          type: 'audio'
+        },
+
+        generation_config: {
+          speech_config: [
+            {
+              voice: voiceToUse
+            }
+          ]
+        }
+      });
+
+      const outputAudio = interaction?.output_audio;
+
+      if (!outputAudio?.data) {
+        console.error(
+          '[TTS] Gemini não retornou output_audio:',
+          JSON.stringify(interaction, null, 2)
+        );
+
+        return res.status(502).json({
+          success: false,
+          error: 'O Gemini respondeu, mas não retornou áudio.',
+          details: 'output_audio.data não encontrado.'
+        });
+      }
+
+      const pcmBuffer = Buffer.from(outputAudio.data, 'base64');
+
+      // Gemini TTS retorna PCM 16-bit, mono, 24 kHz.
+      // Criamos manualmente o cabeçalho WAV para o navegador reproduzir.
+      const sampleRate = 24000;
+      const channels = 1;
+      const bitsPerSample = 16;
+
+      const wavBuffer = pcmToWav(
+        pcmBuffer,
+        sampleRate,
+        channels,
+        bitsPerSample
+      );
+
+      const wavBase64 = wavBuffer.toString('base64');
+
+      const estimatedDuration = Math.max(
+        1,
+        pcmBuffer.length / (sampleRate * channels * (bitsPerSample / 8))
+      );
+
+      console.log(
+        `[TTS] Voz gerada com sucesso. Duração aproximada: ${estimatedDuration.toFixed(2)}s`
+      );
+
+      return res.json({
+        success: true,
+        source: 'gemini_tts',
+        voice: voiceToUse,
+        audioDataUrl: `data:audio/wav;base64,${wavBase64}`,
+        durationSec: Number(estimatedDuration.toFixed(2))
+      });
+
+    } catch (ttsErr: any) {
+
+      console.error('[TTS] ERRO REAL DO GEMINI:', ttsErr);
+
+      return res.status(500).json({
+        success: false,
+        error: 'Falha ao gerar voz com Gemini TTS.',
+        details:
+          ttsErr?.message ||
+          ttsErr?.error?.message ||
+          String(ttsErr)
+      });
+    }
+
   } catch (err: any) {
+
     console.error('Error in /api/voices/generate:', err);
-    res.status(500).json({ error: 'Erro ao gerar narração de voz.' });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Erro interno ao gerar narração.',
+      details: err?.message || String(err)
+    });
   }
 });
 
