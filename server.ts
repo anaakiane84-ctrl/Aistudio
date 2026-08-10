@@ -27,92 +27,46 @@ function getGeminiClient() {
     },
   });
 }
+
 function pcmToWav(
   pcmData: Buffer,
   sampleRate: number = 24000,
   channels: number = 1,
   bitsPerSample: number = 16
 ): Buffer {
+  const byteRate = sampleRate * channels * bitsPerSample / 8;
+  const blockAlign = channels * bitsPerSample / 8;
 
-  const byteRate =
-    sampleRate *
-    channels *
-    bitsPerSample / 8;
+  const wavBuffer = Buffer.alloc(44 + pcmData.length);
 
-  const blockAlign =
-    channels *
-    bitsPerSample / 8;
-
-  const wavBuffer =
-    Buffer.alloc(44 + pcmData.length);
-
-  // RIFF
   wavBuffer.write('RIFF', 0);
-
-  wavBuffer.writeUInt32LE(
-    36 + pcmData.length,
-    4
-  );
-
+  wavBuffer.writeUInt32LE(36 + pcmData.length, 4);
   wavBuffer.write('WAVE', 8);
 
-  // fmt
   wavBuffer.write('fmt ', 12);
+  wavBuffer.writeUInt32LE(16, 16);
+  wavBuffer.writeUInt16LE(1, 20);
+  wavBuffer.writeUInt16LE(channels, 22);
+  wavBuffer.writeUInt32LE(sampleRate, 24);
+  wavBuffer.writeUInt32LE(byteRate, 28);
+  wavBuffer.writeUInt16LE(blockAlign, 32);
+  wavBuffer.writeUInt16LE(bitsPerSample, 34);
 
-  wavBuffer.writeUInt32LE(
-    16,
-    16
-  );
-
-  // PCM = 1
-  wavBuffer.writeUInt16LE(
-    1,
-    20
-  );
-
-  wavBuffer.writeUInt16LE(
-    channels,
-    22
-  );
-
-  wavBuffer.writeUInt32LE(
-    sampleRate,
-    24
-  );
-
-  wavBuffer.writeUInt32LE(
-    byteRate,
-    28
-  );
-
-  wavBuffer.writeUInt16LE(
-    blockAlign,
-    32
-  );
-
-  wavBuffer.writeUInt16LE(
-    bitsPerSample,
-    34
-  );
-
-  // data
   wavBuffer.write('data', 36);
+  wavBuffer.writeUInt32LE(pcmData.length, 40);
 
-  wavBuffer.writeUInt32LE(
-    pcmData.length,
-    40
-  );
-
-  pcmData.copy(
-    wavBuffer,
-    44
-  );
+  pcmData.copy(wavBuffer, 44);
 
   return wavBuffer;
 }
+
 // 1. API - Health check
 app.get('/api/health', (req, res) => {
-  const hasApiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+  const hasApiKey = Boolean(
+    process.env.GEMINI_API_KEY &&
+    process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+  );
+
   res.json({
     status: 'ok',
     hasApiKey,
@@ -127,7 +81,9 @@ app.post('/api/scripts/analyze', async (req, res) => {
     const { script, title, language, globalStyle } = req.body;
 
     if (!script || typeof script !== 'string') {
-      return res.status(400).json({ error: 'O texto do roteiro é obrigatório.' });
+      return res.status(400).json({
+        error: 'O texto do roteiro é obrigatório.',
+      });
     }
 
     const ai = getGeminiClient();
@@ -222,7 +178,10 @@ Responda ESTRITAMENTE em formato JSON com o seguinte schema:
                       estimatedDurationSec: { type: Type.NUMBER },
                       visualPrompt: { type: Type.STRING },
                       negativePrompt: { type: Type.STRING },
-                      characterIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      characterIds: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
                       locationId: { type: Type.STRING },
                       transitionOut: { type: Type.STRING },
                     },
@@ -235,23 +194,33 @@ Responda ESTRITAMENTE em formato JSON com o seguinte schema:
 
         if (response.text) {
           const parsed = JSON.parse(response.text);
-          return res.json({ success: true, source: 'gemini', analysis: parsed });
+
+          return res.json({
+            success: true,
+            source: 'gemini',
+            analysis: parsed,
+          });
         }
       } catch (geminiError: any) {
-        console.warn('Gemini API call failed, falling back to smart analyzer:', geminiError?.message);
+        console.warn(
+          'Gemini API call failed, falling back to smart analyzer:',
+          geminiError?.message
+        );
       }
     }
 
-    // Fallback Smart Local Parser for Demo Mode or API limits
     const sentences = script
       .split(/(?<=[.!?])\s+/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
-    const sceneCount = Math.max(1, sentences.length);
     const scenes = sentences.map((sentence, idx) => {
       const wordCount = sentence.split(/\s+/).length;
-      const duration = Math.max(3, Math.round(wordCount * 0.45));
+      const duration = Math.max(
+        3,
+        Math.round(wordCount * 0.45)
+      );
+
       return {
         id: `scene_${Date.now()}_${idx + 1}`,
         order: idx + 1,
@@ -259,44 +228,70 @@ Responda ESTRITAMENTE em formato JSON com o seguinte schema:
         narrationText: sentence,
         estimatedDurationSec: duration,
         visualPrompt: `Cinematic high quality shot illustrating: ${sentence}. Professional lighting, 8k resolution, detailed aesthetic, ${globalStyle || 'cinematic vibe'}`,
-        negativePrompt: 'blurry, low quality, distorted, extra limbs, watermark, text overlay',
+        negativePrompt:
+          'blurry, low quality, distorted, extra limbs, watermark, text overlay',
         characterIds: ['char_main'],
         locationId: 'loc_primary',
-        transitionOut: idx % 2 === 0 ? 'dissolve' : 'cut',
+        transitionOut:
+          idx % 2 === 0 ? 'dissolve' : 'cut',
       };
     });
 
-    const totalDuration = scenes.reduce((acc, s) => acc + s.estimatedDurationSec, 0);
+    const totalDuration = scenes.reduce(
+      (acc, s) => acc + s.estimatedDurationSec,
+      0
+    );
 
     const fallbackAnalysis = {
-      projectTitle: title || 'Roteiro CineScript AI',
-      language: language || 'Português',
-      estimatedDurationSec: totalDuration,
-      globalVisualStyle: globalStyle || 'Cinematográfico Moderno',
+      projectTitle:
+        title || 'Roteiro CineScript AI',
+      language:
+        language || 'Português',
+      estimatedDurationSec:
+        totalDuration,
+      globalVisualStyle:
+        globalStyle || 'Cinematográfico Moderno',
+
       continuityBible: {
         characters: [
           {
             id: 'char_main',
             name: 'Protagonista Principal',
-            visualDescription: 'Pessoa expressiva, traços marcantes e carismáticos.',
-            clothing: 'Vestuário moderno e elegante.',
+            visualDescription:
+              'Pessoa expressiva, traços marcantes e carismáticos.',
+            clothing:
+              'Vestuário moderno e elegante.',
           },
         ],
+
         locations: [
           {
             id: 'loc_primary',
             name: 'Cenário Principal',
-            visualDescription: 'Ambiente cinematográfico com iluminação de estúdio.',
+            visualDescription:
+              'Ambiente cinematográfico com iluminação de estúdio.',
           },
         ],
       },
+
       scenes,
     };
 
-    return res.json({ success: true, source: 'demo_analyzer', analysis: fallbackAnalysis });
+    return res.json({
+      success: true,
+      source: 'demo_analyzer',
+      analysis: fallbackAnalysis,
+    });
+
   } catch (err: any) {
-    console.error('Error in /api/scripts/analyze:', err);
-    res.status(500).json({ error: 'Falha ao analisar o roteiro.' });
+    console.error(
+      'Error in /api/scripts/analyze:',
+      err
+    );
+
+    res.status(500).json({
+      error: 'Falha ao analisar o roteiro.',
+    });
   }
 });
 
@@ -308,13 +303,18 @@ app.post('/api/voices/generate', async (req, res) => {
       voiceId,
       prebuiltVoiceName,
       pitch,
-      speed
+      speed,
     } = req.body;
 
-    if (!text || typeof text !== 'string' || !text.trim()) {
+    if (
+      !text ||
+      typeof text !== 'string' ||
+      !text.trim()
+    ) {
       return res.status(400).json({
         success: false,
-        error: 'O texto da narração é necessário.'
+        error:
+          'O texto da narração é necessário.',
       });
     }
 
@@ -323,21 +323,25 @@ app.post('/api/voices/generate', async (req, res) => {
     if (!ai) {
       return res.status(500).json({
         success: false,
-        error: 'GEMINI_API_KEY não configurada no servidor.'
+        error:
+          'GEMINI_API_KEY não configurada no servidor.',
       });
     }
 
-    const voiceToUse = prebuiltVoiceName || 'Kore';
+    const voiceToUse =
+      prebuiltVoiceName || 'Kore';
 
     console.log(
       `[TTS] Gerando voz "${voiceToUse}" para ${text.length} caracteres`
     );
 
     try {
-      const interaction: any = await ai.interactions.create({
-        model: 'gemini-3.1-flash-tts-preview',
+      const interaction: any =
+        await ai.interactions.create({
+          model:
+            'gemini-3.1-flash-tts-preview',
 
-        input: `
+          input: `
 Gere exclusivamente a narração em áudio.
 
 Idioma: português do Brasil.
@@ -347,40 +351,48 @@ Não acrescente comentários.
 
 Texto que deve ser falado:
 ${text.trim()}
-        `.trim(),
+          `.trim(),
 
-        response_format: {
-          type: 'audio'
-        },
+          response_format: {
+            type: 'audio',
+          },
 
-        generation_config: {
-          speech_config: [
-            {
-              voice: voiceToUse
-            }
-          ]
-        }
-      });
+          generation_config: {
+            speech_config: [
+              {
+                voice: voiceToUse,
+              },
+            ],
+          },
+        });
 
-      const outputAudio = interaction?.output_audio;
+      const outputAudio =
+        interaction?.output_audio;
 
       if (!outputAudio?.data) {
         console.error(
           '[TTS] Gemini não retornou output_audio:',
-          JSON.stringify(interaction, null, 2)
+          JSON.stringify(
+            interaction,
+            null,
+            2
+          )
         );
 
         return res.status(502).json({
           success: false,
-          error: 'O Gemini respondeu, mas não retornou áudio.',
-          details: 'output_audio.data não encontrado.'
+          error:
+            'O Gemini respondeu, mas não retornou áudio.',
+          details:
+            'output_audio.data não encontrado.',
         });
       }
 
-      const pcmBuffer = Buffer.from(outputAudio.data, 'base64');
+      const pcmBuffer = Buffer.from(
+        outputAudio.data,
+        'base64'
+      );
 
-      // Gemini TTS retorna PCM 16-bit, mono, 24 kHz.
-      // Criamos manualmente o cabeçalho WAV para o navegador reproduzir.
       const sampleRate = 24000;
       const channels = 1;
       const bitsPerSample = 16;
@@ -392,12 +404,19 @@ ${text.trim()}
         bitsPerSample
       );
 
-      const wavBase64 = wavBuffer.toString('base64');
+      const wavBase64 =
+        wavBuffer.toString('base64');
 
-      const estimatedDuration = Math.max(
-        1,
-        pcmBuffer.length / (sampleRate * channels * (bitsPerSample / 8))
-      );
+      const estimatedDuration =
+        Math.max(
+          1,
+          pcmBuffer.length /
+            (
+              sampleRate *
+              channels *
+              (bitsPerSample / 8)
+            )
+        );
 
       console.log(
         `[TTS] Voz gerada com sucesso. Duração aproximada: ${estimatedDuration.toFixed(2)}s`
@@ -407,128 +426,262 @@ ${text.trim()}
         success: true,
         source: 'gemini_tts',
         voice: voiceToUse,
-        audioDataUrl: `data:audio/wav;base64,${wavBase64}`,
-        durationSec: Number(estimatedDuration.toFixed(2))
+        audioDataUrl:
+          `data:audio/wav;base64,${wavBase64}`,
+        durationSec:
+          Number(
+            estimatedDuration.toFixed(2)
+          ),
       });
 
     } catch (ttsErr: any) {
+      console.error(
+        '[TTS] ERRO REAL DO GEMINI:',
+        ttsErr
+      );
 
-      console.error('[TTS] ERRO REAL DO GEMINI:', ttsErr);
+      const status =
+        ttsErr?.status ||
+        ttsErr?.statusCode ||
+        500;
+
+      if (status === 429) {
+        return res.status(429).json({
+          success: false,
+          error:
+            'Limite temporário de geração de voz atingido.',
+          details:
+            ttsErr?.message ||
+            'Aguarde alguns instantes e tente novamente.',
+        });
+      }
 
       return res.status(500).json({
         success: false,
-        error: 'Falha ao gerar voz com Gemini TTS.',
+        error:
+          'Falha ao gerar voz com Gemini TTS.',
         details:
           ttsErr?.message ||
           ttsErr?.error?.message ||
-          String(ttsErr)
+          String(ttsErr),
       });
     }
 
   } catch (err: any) {
-
-    console.error('Error in /api/voices/generate:', err);
+    console.error(
+      'Error in /api/voices/generate:',
+      err
+    );
 
     return res.status(500).json({
       success: false,
-      error: 'Erro interno ao gerar narração.',
-      details: err?.message || String(err)
+      error:
+        'Erro interno ao gerar narração.',
+      details:
+        err?.message || String(err),
     });
   }
 });
 
-// 4. API - Scene AI Generation (Video / Image preview)
+// 4. API - Scene AI Generation
 app.post('/api/scenes/generate', async (req, res) => {
   try {
-    const { sceneId, visualPrompt, negativePrompt, aspectRatio } = req.body;
+    const {
+      sceneId,
+      visualPrompt,
+      negativePrompt,
+      aspectRatio,
+    } = req.body;
 
-    const jobId = `job_scene_${Date.now()}`;
+    const jobId =
+      `job_scene_${Date.now()}`;
+
     const job = {
       id: jobId,
       sceneId,
       status: 'completed',
       progressPercent: 100,
-      message: 'Cena gerada com sucesso!',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      message:
+        'Cena gerada com sucesso!',
+      createdAt:
+        new Date().toISOString(),
+      updatedAt:
+        new Date().toISOString(),
     };
 
     jobsStore.set(jobId, job);
 
-    // Provide high-quality visual placeholder or synthesized video canvas data
-    const promptParam = encodeURIComponent(visualPrompt || 'Cinematic video scene');
-    const width = aspectRatio === '9:16' ? 1080 : aspectRatio === '1:1' ? 1080 : 1920;
-    const height = aspectRatio === '9:16' ? 1920 : aspectRatio === '1:1' ? 1080 : 1080;
+    const width =
+      aspectRatio === '9:16'
+        ? 1080
+        : aspectRatio === '1:1'
+        ? 1080
+        : 1920;
+
+    const height =
+      aspectRatio === '9:16'
+        ? 1920
+        : aspectRatio === '1:1'
+        ? 1080
+        : 1080;
 
     return res.json({
       success: true,
       jobId,
-      imageMediaUrl: `https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=${width}&h=${height}&q=80`,
+      imageMediaUrl:
+        `https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=${width}&h=${height}&q=80`,
       videoMediaUrl: undefined,
       visualPrompt,
     });
+
   } catch (err: any) {
-    console.error('Error in /api/scenes/generate:', err);
-    res.status(500).json({ error: 'Erro ao gerar a cena.' });
+    console.error(
+      'Error in /api/scenes/generate:',
+      err
+    );
+
+    res.status(500).json({
+      error:
+        'Erro ao gerar a cena.',
+    });
   }
 });
 
 // 5. API - Captions Auto Generator
 app.post('/api/captions/generate', (req, res) => {
   try {
-    const { scenes, narrationText } = req.body;
+    const {
+      scenes,
+      narrationText,
+    } = req.body;
 
     const cues: any[] = [];
     let currentTime = 0;
 
-    if (Array.isArray(scenes) && scenes.length > 0) {
+    if (
+      Array.isArray(scenes) &&
+      scenes.length > 0
+    ) {
       scenes.forEach((scene: any) => {
-        const text = scene.narrationText || '';
-        const duration = scene.estimatedDurationSec || 4;
+        const text =
+          scene.narrationText || '';
+
+        const duration =
+          scene.estimatedDurationSec || 4;
 
         if (text) {
-          const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-          const timePerSentence = duration / sentences.length;
+          const sentences =
+            text
+              .split(/(?<=[.!?])\s+/)
+              .filter(Boolean);
 
-          sentences.forEach((sentence: string, sIdx: number) => {
-            const startSec = currentTime + sIdx * timePerSentence;
-            const endSec = startSec + timePerSentence;
+          const timePerSentence =
+            duration /
+            sentences.length;
 
-            const wordsList = sentence.split(/\s+/).map((word: string, wIdx: number, arr: string[]) => {
-              const wordDuration = timePerSentence / arr.length;
-              return {
-                word,
-                startTimeSec: Number((startSec + wIdx * wordDuration).toFixed(2)),
-                endTimeSec: Number((startSec + (wIdx + 1) * wordDuration).toFixed(2)),
-              };
-            });
+          sentences.forEach(
+            (
+              sentence: string,
+              sIdx: number
+            ) => {
+              const startSec =
+                currentTime +
+                sIdx *
+                timePerSentence;
 
-            cues.push({
-              id: `cue_${Date.now()}_${sIdx}`,
-              sceneId: scene.id,
-              text: sentence,
-              startTimeSec: Number(startSec.toFixed(2)),
-              endTimeSec: Number(endSec.toFixed(2)),
-              words: wordsList,
-            });
-          });
+              const endSec =
+                startSec +
+                timePerSentence;
+
+              const wordsList =
+                sentence
+                  .split(/\s+/)
+                  .map(
+                    (
+                      word: string,
+                      wIdx: number,
+                      arr: string[]
+                    ) => {
+                      const wordDuration =
+                        timePerSentence /
+                        arr.length;
+
+                      return {
+                        word,
+                        startTimeSec:
+                          Number(
+                            (
+                              startSec +
+                              wIdx *
+                                wordDuration
+                            ).toFixed(2)
+                          ),
+                        endTimeSec:
+                          Number(
+                            (
+                              startSec +
+                              (wIdx + 1) *
+                                wordDuration
+                            ).toFixed(2)
+                          ),
+                      };
+                    }
+                  );
+
+              cues.push({
+                id:
+                  `cue_${Date.now()}_${sIdx}`,
+                sceneId:
+                  scene.id,
+                text:
+                  sentence,
+                startTimeSec:
+                  Number(
+                    startSec.toFixed(2)
+                  ),
+                endTimeSec:
+                  Number(
+                    endSec.toFixed(2)
+                  ),
+                words:
+                  wordsList,
+              });
+            }
+          );
         }
+
         currentTime += duration;
       });
     }
 
-    res.json({ success: true, cues });
+    res.json({
+      success: true,
+      cues,
+    });
+
   } catch (err: any) {
-    console.error('Error in /api/captions/generate:', err);
-    res.status(500).json({ error: 'Erro ao gerar legendas.' });
+    console.error(
+      'Error in /api/captions/generate:',
+      err
+    );
+
+    res.status(500).json({
+      error:
+        'Erro ao gerar legendas.',
+    });
   }
 });
 
 // 6. API - Render & Export Jobs
 app.post('/api/exports', (req, res) => {
   try {
-    const { projectId, settings } = req.body;
-    const exportId = `export_${Date.now()}`;
+    const {
+      projectId,
+      settings,
+    } = req.body;
+
+    const exportId =
+      `export_${Date.now()}`;
 
     const job = {
       id: exportId,
@@ -536,96 +689,194 @@ app.post('/api/exports', (req, res) => {
       type: 'export',
       status: 'queued',
       progressPercent: 10,
-      message: 'Preparando plano de renderização FFmpeg e recursos de mídia...',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      message:
+        'Preparando plano de renderização FFmpeg e recursos de mídia...',
+      createdAt:
+        new Date().toISOString(),
+      updatedAt:
+        new Date().toISOString(),
       settings,
     };
 
-    jobsStore.set(exportId, job);
+    jobsStore.set(
+      exportId,
+      job
+    );
 
-    res.json({ success: true, exportJob: job });
+    res.json({
+      success: true,
+      exportJob: job,
+    });
+
   } catch (err: any) {
-    console.error('Error in /api/exports:', err);
-    res.status(500).json({ error: 'Erro ao criar job de exportação.' });
+    console.error(
+      'Error in /api/exports:',
+      err
+    );
+
+    res.status(500).json({
+      error:
+        'Erro ao criar job de exportação.',
+    });
   }
 });
 
 app.get('/api/exports/:id', (req, res) => {
-  const exportId = req.params.id;
-  const job = jobsStore.get(exportId);
+  const exportId =
+    req.params.id;
+
+  const job =
+    jobsStore.get(exportId);
 
   if (!job) {
-    // Return mock completed export if not found
     return res.json({
       exportJob: {
         id: exportId,
-        status: 'completed',
-        progressPercent: 100,
-        message: 'Vídeo renderizado com sucesso!',
-        resultUrl: '#download_demo',
+        status:
+          'completed',
+        progressPercent:
+          100,
+        message:
+          'Vídeo renderizado com sucesso!',
+        resultUrl:
+          '#download_demo',
       },
     });
   }
 
-  // Progress simulation for render
   if (job.status === 'queued') {
-    job.status = 'processing';
-    job.progressPercent = 35;
-    job.message = 'Sincronizando áudio de narração e legendas automáticas...';
-  } else if (job.status === 'processing' && job.progressPercent < 90) {
+    job.status =
+      'processing';
+
+    job.progressPercent =
+      35;
+
+    job.message =
+      'Sincronizando áudio de narração e legendas automáticas...';
+
+  } else if (
+    job.status === 'processing' &&
+    job.progressPercent < 90
+  ) {
     job.progressPercent += 30;
-    job.message = 'Aplicando transições, filtros e codificando MP4 H.264...';
-  } else if (job.progressPercent >= 90) {
-    job.status = 'completed';
-    job.progressPercent = 100;
-    job.message = 'Vídeo MP4 gerado e pronto para download!';
-    job.resultUrl = '#download_demo';
+
+    job.message =
+      'Aplicando transições, filtros e codificando MP4 H.264...';
+
+  } else if (
+    job.progressPercent >= 90
+  ) {
+    job.status =
+      'completed';
+
+    job.progressPercent =
+      100;
+
+    job.message =
+      'Vídeo MP4 gerado e pronto para download!';
+
+    job.resultUrl =
+      '#download_demo';
   }
 
-  job.updatedAt = new Date().toISOString();
-  jobsStore.set(exportId, job);
+  job.updatedAt =
+    new Date().toISOString();
 
-  res.json({ exportJob: job });
+  jobsStore.set(
+    exportId,
+    job
+  );
+
+  res.json({
+    exportJob: job,
+  });
 });
 
 app.post('/api/jobs/:id/cancel', (req, res) => {
-  const jobId = req.params.id;
-  const job = jobsStore.get(jobId);
+  const jobId =
+    req.params.id;
+
+  const job =
+    jobsStore.get(jobId);
+
   if (job) {
-    job.status = 'cancelled';
-    job.message = 'Operação cancelada pelo usuário.';
-    jobsStore.set(jobId, job);
+    job.status =
+      'cancelled';
+
+    job.message =
+      'Operação cancelada pelo usuário.';
+
+    jobsStore.set(
+      jobId,
+      job
+    );
   }
-  res.json({ success: true, jobId });
+
+  res.json({
+    success: true,
+    jobId,
+  });
 });
 
 // Setup Vite or Static File Serving
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  if (
+    process.env.NODE_ENV !==
+    'production'
+  ) {
+    const {
+      createServer:
+        createViteServer,
+    } =
+      await import('vite');
+
+    const vite =
+      await createViteServer({
+        server: {
+          middlewareMode:
+            true,
+        },
+        appType: 'spa',
+      });
+
+    app.use(
+      vite.middlewares
+    );
+
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    const distPath =
+      path.join(
+        process.cwd(),
+        'dist'
+      );
+
+    app.use(
+      express.static(
+        distPath
+      )
+    );
+
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(
+        path.join(
+          distPath,
+          'index.html'
+        )
+      );
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🎬 CineScript AI Server running at http://0.0.0.0:${PORT}`);
-  });
+  app.listen(
+    PORT,
+    '0.0.0.0',
+    () => {
+      console.log(
+        `🎬 CineScript AI Server running at http://0.0.0.0:${PORT}`
+      );
+    }
+  );
 }
 
-// Vercel imports the Express app as a serverless function. Starting a
-// long-running listener there prevents the function from being initialized.
-// Outside Vercel (for example, `npm run dev`) we keep the original local
-// server behavior.
 if (!process.env.VERCEL) {
   startServer();
 }
