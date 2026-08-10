@@ -19,7 +19,6 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
   const totalDuration = Math.max(
     5,
@@ -41,14 +40,12 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 
   // Determine current active scene based on playhead time
   let activeScene: Scene | null = null;
-  let activeSceneStartSec = 0;
   let accumulatedTime = 0;
 
   for (const scene of project.scenes) {
     const sceneDur = scene.estimatedDurationSec || 4;
     if (currentTimeSec >= accumulatedTime && currentTimeSec < accumulatedTime + sceneDur) {
       activeScene = scene;
-      activeSceneStartSec = accumulatedTime;
       break;
     }
     accumulatedTime += sceneDur;
@@ -56,33 +53,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 
   if (!activeScene && project.scenes.length > 0) {
     activeScene = project.scenes[project.scenes.length - 1];
-    activeSceneStartSec = Math.max(0, totalDuration - (activeScene.estimatedDurationSec || 4));
   }
-
-  const activeSceneAudioUrl = activeScene?.narrationAudioUrl;
-  const localSceneTimeSec = Math.max(0, currentTimeSec - activeSceneStartSec);
-
-  // Keep the generated narration synchronized with the preview playhead.
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !activeSceneAudioUrl) return;
-
-    audio.muted = isMuted;
-    const desiredTime = Math.min(localSceneTimeSec, Number.isFinite(audio.duration) ? audio.duration : localSceneTimeSec);
-    if (Math.abs(audio.currentTime - desiredTime) > 0.35) {
-      try {
-        audio.currentTime = desiredTime;
-      } catch {
-        // Metadata may not be ready yet; onLoadedMetadata below will synchronize it.
-      }
-    }
-
-    if (isPlaying) {
-      audio.play().catch((err) => console.warn('Não foi possível iniciar a narração:', err));
-    } else {
-      audio.pause();
-    }
-  }, [activeSceneAudioUrl, activeScene?.id, isPlaying, isMuted, localSceneTimeSec]);
 
   // Determine current active caption cue
   const activeCue = project.captions.cues.find(
@@ -181,25 +152,6 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
                 )}
               </div>
             </div>
-          )}
-
-          {/* Generated narration audio for the active scene */}
-          {activeSceneAudioUrl && (
-            <audio
-              ref={audioRef}
-              key={activeScene?.id}
-              src={activeSceneAudioUrl}
-              preload="auto"
-              muted={isMuted}
-              onLoadedMetadata={() => {
-                const audio = audioRef.current;
-                if (!audio) return;
-                audio.currentTime = Math.min(localSceneTimeSec, audio.duration || localSceneTimeSec);
-                if (isPlaying) {
-                  audio.play().catch((err) => console.warn('Não foi possível iniciar a narração:', err));
-                }
-              }}
-            />
           )}
 
           {/* Watermark / Logo Overlay */}
