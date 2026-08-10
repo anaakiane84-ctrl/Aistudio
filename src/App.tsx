@@ -9,6 +9,7 @@ import { TimelineEditor } from './components/TimelineEditor';
 import { ExportModal } from './components/ExportModal';
 import { Project, AspectRatio, TimelineData } from './types';
 import { SAMPLE_PROJECT } from './data/sampleProjects';
+import { getVoiceById } from './data/voices';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>(() => {
@@ -146,9 +147,11 @@ export default function App() {
   };
 
   // Generate TTS Audio for Scene
-  const handleGenerateVoiceForScene = async (sceneId: string, voiceId: string) => {
+  const handleGenerateVoiceForScene = async (sceneId: string, voiceId: string): Promise<void> => {
     const targetScene = activeProject.scenes.find((s) => s.id === sceneId);
     if (!targetScene) return;
+
+    const voice = getVoiceById(voiceId);
 
     try {
       const res = await fetch('/api/voices/generate', {
@@ -156,21 +159,50 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: targetScene.narrationText,
-          voiceId,
+          voiceId: voice.id,
+          prebuiltVoiceName: voice.prebuiltVoiceName,
+          pitch: voice.defaultPitch,
+          speed: voice.defaultSpeed,
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.audioDataUrl) {
-        const updatedScenes = activeProject.scenes.map((s) =>
-          s.id === sceneId
-            ? { ...s, narrationAudioUrl: data.audioDataUrl, actualDurationSec: data.durationSec }
-            : s
-        );
-        handleUpdateActiveProject({ ...activeProject, scenes: updatedScenes });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.success) {
+        const details = data.details || data.error || `HTTP ${res.status}`;
+        console.error('Erro ao gerar voz:', details);
+
+        if (res.status === 429 || String(details).includes('429') || String(details).toLowerCase().includes('quota')) {
+          alert('O limite temporário do Gemini TTS foi atingido. Aguarde um pouco e tente novamente.');
+        } else {
+          alert(`Não foi possível gerar a narração: ${details}`);
+        }
+        return;
       }
-    } catch (err) {
+
+      if (data.audioDataUrl) {
+        setProjects((prev) =>
+          prev.map((project) => {
+            if (project.id !== activeProject.id) return project;
+            return {
+              ...project,
+              updatedAt: new Date().toISOString(),
+              scenes: project.scenes.map((scene) =>
+                scene.id === sceneId
+                  ? {
+                      ...scene,
+                      narrationAudioUrl: data.audioDataUrl,
+                      actualDurationSec: data.durationSec,
+                    }
+                  : scene
+              ),
+            };
+          })
+        );
+      }
+    } catch (err: any) {
       console.error('Error generating voice for scene:', err);
+      alert(`Erro de comunicação ao gerar a narração: ${err?.message || String(err)}`);
     }
   };
 
