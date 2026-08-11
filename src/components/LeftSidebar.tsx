@@ -28,7 +28,7 @@ interface LeftSidebarProps {
   onUpdateProject: (updated: Project) => void;
   activeSceneId: string | null;
   onSelectScene: (sceneId: string) => void;
-  onGenerateVoiceForScene: (sceneId: string, voiceId: string) => void;
+  onGenerateVoiceForScene: (sceneId: string, voiceId: string) => Promise<void>;
   onGenerateSceneVisual: (sceneId: string) => void;
 }
 
@@ -357,30 +357,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   <div
                     key={voice.id}
                     onClick={() => {
-                      const updatedTracks = project.timeline.tracks.map((track) =>
-                        track.type === 'voice'
-                          ? {
-                              ...track,
-                              title: `Narração (${voice.name})`,
-                              clips: track.clips.map((clip) => ({
-                                ...clip,
-                                name: `Narração ${voice.name}`,
-                              })),
-                            }
-                          : track
-                      );
-
                       onUpdateProject({
                         ...project,
-                        settings: {
-                          ...project.settings,
-                          defaultVoiceId: voice.id,
-                        },
-                        timeline: {
-                          ...project.timeline,
-                          tracks: updatedTracks,
-                        },
-                        updatedAt: new Date().toISOString(),
+                        settings: { ...project.settings, defaultVoiceId: voice.id },
                       });
                     }}
                     className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start space-x-3 ${
