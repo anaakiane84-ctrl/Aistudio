@@ -62,62 +62,27 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
   const activeSceneAudioUrl = activeScene?.narrationAudioUrl;
   const localSceneTimeSec = Math.max(0, currentTimeSec - activeSceneStartSec);
 
-  // Keep narration state synchronized without repeatedly calling play().
-  // The actual play() call is made directly from the user's Play button click,
-  // which avoids browser autoplay restrictions.
+  // Keep the generated narration synchronized with the preview playhead.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !activeSceneAudioUrl) return;
 
     audio.muted = isMuted;
-
-    if (!isPlaying) {
-      audio.pause();
-    }
-  }, [isPlaying, isMuted, activeSceneAudioUrl, activeScene?.id]);
-
-  // Reposition the audio only when the playhead drifts noticeably.
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !activeSceneAudioUrl || !Number.isFinite(audio.duration)) return;
-
-    const desiredTime = Math.min(localSceneTimeSec, audio.duration);
-    if (Math.abs(audio.currentTime - desiredTime) > 0.75) {
+    const desiredTime = Math.min(localSceneTimeSec, Number.isFinite(audio.duration) ? audio.duration : localSceneTimeSec);
+    if (Math.abs(audio.currentTime - desiredTime) > 0.35) {
       try {
         audio.currentTime = desiredTime;
       } catch {
-        // Metadata may still be loading.
+        // Metadata may not be ready yet; onLoadedMetadata below will synchronize it.
       }
     }
-  }, [currentTimeSec, activeSceneAudioUrl, activeScene?.id, localSceneTimeSec]);
-
-  const handleTogglePlay = async () => {
-    const audio = audioRef.current;
 
     if (isPlaying) {
-      audio?.pause();
-      onTogglePlay();
-      return;
+      audio.play().catch((err) => console.warn('Não foi possível iniciar a narração:', err));
+    } else {
+      audio.pause();
     }
-
-    // Start the audio directly inside the click handler so Chrome/Safari
-    // consider it a user-initiated playback action.
-    if (audio && activeSceneAudioUrl) {
-      try {
-        audio.muted = isMuted;
-
-        if (Number.isFinite(audio.duration)) {
-          audio.currentTime = Math.min(localSceneTimeSec, audio.duration);
-        }
-
-        await audio.play();
-      } catch (err) {
-        console.error('Não foi possível reproduzir a narração:', err);
-      }
-    }
-
-    onTogglePlay();
-  };
+  }, [activeSceneAudioUrl, activeScene?.id, isPlaying, isMuted, localSceneTimeSec]);
 
   // Determine current active caption cue
   const activeCue = project.captions.cues.find(
@@ -230,6 +195,9 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
                 const audio = audioRef.current;
                 if (!audio) return;
                 audio.currentTime = Math.min(localSceneTimeSec, audio.duration || localSceneTimeSec);
+                if (isPlaying) {
+                  audio.play().catch((err) => console.warn('Não foi possível iniciar a narração:', err));
+                }
               }}
             />
           )}
@@ -253,7 +221,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
           </button>
 
           <button
-            onClick={handleTogglePlay}
+            onClick={onTogglePlay}
             className="p-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white shadow-md shadow-violet-600/30 transition-transform active:scale-95"
             title={isPlaying ? 'Pausar' : 'Reproduzir'}
           >
