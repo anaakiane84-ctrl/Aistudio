@@ -19,6 +19,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 }) => {
   const [isMuted, setIsMuted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const totalDuration = Math.max(
     5,
@@ -40,12 +41,14 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 
   // Determine current active scene based on playhead time
   let activeScene: Scene | null = null;
+  let activeSceneStartSec = 0;
   let accumulatedTime = 0;
 
   for (const scene of project.scenes) {
     const sceneDur = scene.estimatedDurationSec || 4;
     if (currentTimeSec >= accumulatedTime && currentTimeSec < accumulatedTime + sceneDur) {
       activeScene = scene;
+      activeSceneStartSec = accumulatedTime;
       break;
     }
     accumulatedTime += sceneDur;
@@ -53,7 +56,68 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
 
   if (!activeScene && project.scenes.length > 0) {
     activeScene = project.scenes[project.scenes.length - 1];
+    activeSceneStartSec = Math.max(0, totalDuration - (activeScene.estimatedDurationSec || 4));
   }
+
+  const activeSceneAudioUrl = activeScene?.narrationAudioUrl;
+  const localSceneTimeSec = Math.max(0, currentTimeSec - activeSceneStartSec);
+
+  // Keep narration state synchronized without repeatedly calling play().
+  // The actual play() call is made directly from the user's Play button click,
+  // which avoids browser autoplay restrictions.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.muted = isMuted;
+
+    if (!isPlaying) {
+      audio.pause();
+    }
+  }, [isPlaying, isMuted, activeSceneAudioUrl, activeScene?.id]);
+
+  // Reposition the audio only when the playhead drifts noticeably.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !activeSceneAudioUrl || !Number.isFinite(audio.duration)) return;
+
+    const desiredTime = Math.min(localSceneTimeSec, audio.duration);
+    if (Math.abs(audio.currentTime - desiredTime) > 0.75) {
+      try {
+        audio.currentTime = desiredTime;
+      } catch {
+        // Metadata may still be loading.
+      }
+    }
+  }, [currentTimeSec, activeSceneAudioUrl, activeScene?.id, localSceneTimeSec]);
+
+  const handleTogglePlay = async () => {
+    const audio = audioRef.current;
+
+    if (isPlaying) {
+      audio?.pause();
+      onTogglePlay();
+      return;
+    }
+
+    // Start the audio directly inside the click handler so Chrome/Safari
+    // consider it a user-initiated playback action.
+    if (audio && activeSceneAudioUrl) {
+      try {
+        audio.muted = isMuted;
+
+        if (Number.isFinite(audio.duration)) {
+          audio.currentTime = Math.min(localSceneTimeSec, audio.duration);
+        }
+
+        await audio.play();
+      } catch (err) {
+        console.error('Não foi possível reproduzir a narração:', err);
+      }
+    }
+
+    onTogglePlay();
+  };
 
   // Determine current active caption cue
   const activeCue = project.captions.cues.find(
@@ -154,6 +218,22 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
             </div>
           )}
 
+          {/* Generated narration audio for the active scene */}
+          {activeSceneAudioUrl && (
+            <audio
+              ref={audioRef}
+              key={activeScene?.id}
+              src={activeSceneAudioUrl}
+              preload="auto"
+              muted={isMuted}
+              onLoadedMetadata={() => {
+                const audio = audioRef.current;
+                if (!audio) return;
+                audio.currentTime = Math.min(localSceneTimeSec, audio.duration || localSceneTimeSec);
+              }}
+            />
+          )}
+
           {/* Watermark / Logo Overlay */}
           <div className="absolute top-3 right-3 text-[10px] font-bold text-white/40 tracking-wider bg-black/40 px-2 py-0.5 rounded backdrop-blur-sm pointer-events-none">
             CineScript AI
@@ -173,7 +253,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
           </button>
 
           <button
-            onClick={onTogglePlay}
+            onClick={handleTogglePlay}
             className="p-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white shadow-md shadow-violet-600/30 transition-transform active:scale-95"
             title={isPlaying ? 'Pausar' : 'Reproduzir'}
           >

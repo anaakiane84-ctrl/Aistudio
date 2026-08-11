@@ -184,18 +184,43 @@ export default function App() {
         setProjects((prev) =>
           prev.map((project) => {
             if (project.id !== activeProject.id) return project;
+
+            const updatedScenes = project.scenes.map((scene) =>
+              scene.id === sceneId
+                ? {
+                    ...scene,
+                    narrationAudioUrl: data.audioDataUrl,
+                    actualDurationSec: data.durationSec,
+                  }
+                : scene
+            );
+
+            const updatedTracks = project.timeline.tracks.map((track) => {
+              if (track.type !== 'voice') return track;
+
+              return {
+                ...track,
+                title: `Narração (${voice.name})`,
+                clips: track.clips.map((clip, index) => ({
+                  ...clip,
+                  name: `Narração ${voice.name}`,
+                  sourceUrl: index === 0 ? data.audioDataUrl : clip.sourceUrl,
+                  durationSec:
+                    index === 0 && data.durationSec
+                      ? data.durationSec
+                      : clip.durationSec,
+                })),
+              };
+            });
+
             return {
               ...project,
               updatedAt: new Date().toISOString(),
-              scenes: project.scenes.map((scene) =>
-                scene.id === sceneId
-                  ? {
-                      ...scene,
-                      narrationAudioUrl: data.audioDataUrl,
-                      actualDurationSec: data.durationSec,
-                    }
-                  : scene
-              ),
+              scenes: updatedScenes,
+              timeline: {
+                ...project.timeline,
+                tracks: updatedTracks,
+              },
             };
           })
         );
