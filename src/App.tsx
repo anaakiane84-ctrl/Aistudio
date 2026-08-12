@@ -184,43 +184,18 @@ export default function App() {
         setProjects((prev) =>
           prev.map((project) => {
             if (project.id !== activeProject.id) return project;
-
-            const updatedScenes = project.scenes.map((scene) =>
-              scene.id === sceneId
-                ? {
-                    ...scene,
-                    narrationAudioUrl: data.audioDataUrl,
-                    actualDurationSec: data.durationSec,
-                  }
-                : scene
-            );
-
-            const updatedTracks = project.timeline.tracks.map((track) => {
-              if (track.type !== 'voice') return track;
-
-              return {
-                ...track,
-                title: `Narração (${voice.name})`,
-                clips: track.clips.map((clip, index) => ({
-                  ...clip,
-                  name: `Narração ${voice.name}`,
-                  sourceUrl: index === 0 ? data.audioDataUrl : clip.sourceUrl,
-                  durationSec:
-                    index === 0 && data.durationSec
-                      ? data.durationSec
-                      : clip.durationSec,
-                })),
-              };
-            });
-
             return {
               ...project,
               updatedAt: new Date().toISOString(),
-              scenes: updatedScenes,
-              timeline: {
-                ...project.timeline,
-                tracks: updatedTracks,
-              },
+              scenes: project.scenes.map((scene) =>
+                scene.id === sceneId
+                  ? {
+                      ...scene,
+                      narrationAudioUrl: data.audioDataUrl,
+                      actualDurationSec: data.durationSec,
+                    }
+                  : scene
+              ),
             };
           })
         );
@@ -231,10 +206,20 @@ export default function App() {
     }
   };
 
-  // Generate AI Visual for Scene
+  // Generate real AI image for Scene
   const handleGenerateSceneVisual = async (sceneId: string) => {
     const targetScene = activeProject.scenes.find((s) => s.id === sceneId);
     if (!targetScene) return;
+
+    // Give immediate visual feedback while the API is working.
+    handleUpdateActiveProject({
+      ...activeProject,
+      scenes: activeProject.scenes.map((scene) =>
+        scene.id === sceneId
+          ? { ...scene, status: 'generating' as const, generationError: undefined }
+          : scene
+      ),
+    });
 
     try {
       const res = await fetch('/api/scenes/generate', {
@@ -243,26 +228,75 @@ export default function App() {
         body: JSON.stringify({
           sceneId,
           visualPrompt: targetScene.visualPrompt,
+          negativePrompt: targetScene.negativePrompt,
           aspectRatio: activeProject.settings.aspectRatio,
         }),
       });
 
       const data = await res.json();
-      if (data.success) {
-        const updatedScenes = activeProject.scenes.map((s) =>
-          s.id === sceneId
-            ? {
-                ...s,
-                imageMediaUrl: data.imageMediaUrl,
-                videoMediaUrl: data.videoMediaUrl,
-                status: 'completed' as const,
-              }
-            : s
-        );
-        handleUpdateActiveProject({ ...activeProject, scenes: updatedScenes });
+
+      if (!res.ok || !data.success) {
+        const message =
+          data?.details ||
+          data?.error ||
+          `Falha ao gerar imagem (HTTP ${res.status}).`;
+
+        console.error('Image generation failed:', data);
+
+        handleUpdateActiveProject({
+          ...activeProject,
+          scenes: activeProject.scenes.map((scene) =>
+            scene.id === sceneId
+              ? {
+                  ...scene,
+                  status: 'failed' as const,
+                  generationError: message,
+                }
+              : scene
+          ),
+        });
+
+        alert(message);
+        return;
       }
-    } catch (err) {
+
+      const updatedScenes = activeProject.scenes.map((scene) =>
+        scene.id === sceneId
+          ? {
+              ...scene,
+              imageMediaUrl: data.imageMediaUrl,
+              videoMediaUrl: data.videoMediaUrl,
+              status: 'completed' as const,
+              generationError: undefined,
+            }
+          : scene
+      );
+
+      handleUpdateActiveProject({
+        ...activeProject,
+        scenes: updatedScenes,
+      });
+    } catch (err: any) {
       console.error('Error generating scene visual:', err);
+
+      const message =
+        err?.message ||
+        'Erro de comunicação ao gerar a imagem da cena.';
+
+      handleUpdateActiveProject({
+        ...activeProject,
+        scenes: activeProject.scenes.map((scene) =>
+          scene.id === sceneId
+            ? {
+                ...scene,
+                status: 'failed' as const,
+                generationError: message,
+              }
+            : scene
+        ),
+      });
+
+      alert(message);
     }
   };
 
