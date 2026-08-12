@@ -557,7 +557,7 @@ REQUISITOS:
         input: generationPrompt,
         response_format: {
           type: 'image',
-          mime_type: 'image/png',
+          mime_type: 'image/jpeg',
           aspect_ratio: safeAspectRatio,
           image_size: '1K',
         },
@@ -590,7 +590,7 @@ REQUISITOS:
       const mimeType =
         outputImage.mime_type ||
         outputImage.mimeType ||
-        'image/png';
+        'image/jpeg';
 
       const imageMediaUrl =
         `data:${mimeType};base64,${outputImage.data}`;
