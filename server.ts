@@ -483,7 +483,7 @@ ${text.trim()}
   }
 });
 
-// 4. API - Scene AI Generation
+// 4. API - Real Scene Image Generation with Gemini / Nano Banana
 app.post('/api/scenes/generate', async (req, res) => {
   try {
     const {
@@ -493,56 +493,184 @@ app.post('/api/scenes/generate', async (req, res) => {
       aspectRatio,
     } = req.body;
 
-    const jobId =
-      `job_scene_${Date.now()}`;
+    if (!visualPrompt || typeof visualPrompt !== 'string' || !visualPrompt.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'O prompt visual da cena é obrigatório.',
+      });
+    }
 
-    const job = {
+    const ai = getGeminiClient();
+
+    if (!ai) {
+      return res.status(500).json({
+        success: false,
+        error: 'GEMINI_API_KEY não configurada no servidor.',
+      });
+    }
+
+    const safeAspectRatio =
+      aspectRatio === '9:16' || aspectRatio === '1:1' || aspectRatio === '16:9'
+        ? aspectRatio
+        : '16:9';
+
+    const jobId = `job_scene_${Date.now()}`;
+
+    jobsStore.set(jobId, {
       id: jobId,
       sceneId,
-      status: 'completed',
-      progressPercent: 100,
-      message:
-        'Cena gerada com sucesso!',
-      createdAt:
-        new Date().toISOString(),
-      updatedAt:
-        new Date().toISOString(),
-    };
-
-    jobsStore.set(jobId, job);
-
-    const width =
-      aspectRatio === '9:16'
-        ? 1080
-        : aspectRatio === '1:1'
-        ? 1080
-        : 1920;
-
-    const height =
-      aspectRatio === '9:16'
-        ? 1920
-        : aspectRatio === '1:1'
-        ? 1080
-        : 1080;
-
-    return res.json({
-      success: true,
-      jobId,
-      imageMediaUrl:
-        `https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=${width}&h=${height}&q=80`,
-      videoMediaUrl: undefined,
-      visualPrompt,
+      status: 'processing',
+      progressPercent: 25,
+      message: 'Gerando imagem da cena com IA...',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
 
-  } catch (err: any) {
-    console.error(
-      'Error in /api/scenes/generate:',
-      err
+    const imageModel =
+      process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
+
+    const generationPrompt = `
+Crie UMA imagem cinematográfica para uma cena de vídeo.
+
+PROMPT PRINCIPAL:
+${visualPrompt.trim()}
+
+${negativePrompt ? `EVITAR:\n${negativePrompt.trim()}` : ''}
+
+REQUISITOS:
+- composição adequada para vídeo no formato ${safeAspectRatio};
+- imagem visualmente coerente, detalhada e profissional;
+- iluminação cinematográfica;
+- sem moldura;
+- sem interface de aplicativo;
+- sem texto sobreposto, salvo se o prompt pedir explicitamente;
+- não explique a imagem e não retorne texto: gere apenas a imagem.
+    `.trim();
+
+    console.log(
+      `[IMAGE] Gerando cena ${sceneId || 'sem-id'} com ${imageModel} em ${safeAspectRatio}`
     );
 
-    res.status(500).json({
-      error:
-        'Erro ao gerar a cena.',
+    try {
+      const interaction: any = await ai.interactions.create({
+        model: imageModel,
+        input: generationPrompt,
+        response_format: {
+          type: 'image',
+          mime_type: 'image/png',
+          aspect_ratio: safeAspectRatio,
+          image_size: '1K',
+        },
+      });
+
+      const outputImage = interaction?.output_image;
+
+      if (!outputImage?.data) {
+        console.error(
+          '[IMAGE] Gemini respondeu sem output_image:',
+          JSON.stringify(interaction, null, 2)
+        );
+
+        const failedJob = jobsStore.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.progressPercent = 100;
+          failedJob.message = 'A IA respondeu, mas não retornou uma imagem.';
+          failedJob.updatedAt = new Date().toISOString();
+          jobsStore.set(jobId, failedJob);
+        }
+
+        return res.status(502).json({
+          success: false,
+          error: 'O Gemini respondeu, mas não retornou imagem.',
+          details: 'output_image.data não encontrado.',
+        });
+      }
+
+      const mimeType =
+        outputImage.mime_type ||
+        outputImage.mimeType ||
+        'image/png';
+
+      const imageMediaUrl =
+        `data:${mimeType};base64,${outputImage.data}`;
+
+      const completedJob = jobsStore.get(jobId);
+      if (completedJob) {
+        completedJob.status = 'completed';
+        completedJob.progressPercent = 100;
+        completedJob.message = 'Imagem da cena gerada com sucesso!';
+        completedJob.updatedAt = new Date().toISOString();
+        jobsStore.set(jobId, completedJob);
+      }
+
+      console.log(
+        `[IMAGE] Cena ${sceneId || 'sem-id'} gerada com sucesso.`
+      );
+
+      return res.json({
+        success: true,
+        source: 'gemini_image',
+        model: imageModel,
+        jobId,
+        imageMediaUrl,
+        videoMediaUrl: undefined,
+        visualPrompt,
+        aspectRatio: safeAspectRatio,
+      });
+    } catch (imageErr: any) {
+      console.error('[IMAGE] ERRO REAL DO GEMINI:', imageErr);
+
+      const failedJob = jobsStore.get(jobId);
+      if (failedJob) {
+        failedJob.status = 'failed';
+        failedJob.progressPercent = 100;
+        failedJob.message = 'Falha ao gerar imagem.';
+        failedJob.updatedAt = new Date().toISOString();
+        jobsStore.set(jobId, failedJob);
+      }
+
+      const status =
+        imageErr?.status ||
+        imageErr?.statusCode ||
+        500;
+
+      if (status === 429) {
+        return res.status(429).json({
+          success: false,
+          error: 'Limite de geração de imagens atingido.',
+          details:
+            imageErr?.message ||
+            'Aguarde e tente novamente ou verifique os limites da sua conta Gemini.',
+        });
+      }
+
+      if (status === 402 || status === 403) {
+        return res.status(status).json({
+          success: false,
+          error: 'A geração de imagens exige uma conta/projeto com cobrança habilitada.',
+          details:
+            imageErr?.message ||
+            'Verifique o faturamento do projeto associado à GEMINI_API_KEY.',
+        });
+      }
+
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        success: false,
+        error: 'Falha ao gerar imagem com Gemini.',
+        details:
+          imageErr?.message ||
+          imageErr?.error?.message ||
+          String(imageErr),
+      });
+    }
+  } catch (err: any) {
+    console.error('Error in /api/scenes/generate:', err);
+
+    return res.status(500).json({
+      success: false,
+      error: 'Erro interno ao gerar a cena.',
+      details: err?.message || String(err),
     });
   }
 });
